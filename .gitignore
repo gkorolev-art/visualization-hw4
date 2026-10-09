@@ -1,0 +1,9 @@
+.DS_Store
+.openai/
+.sites-runtime/
+preview.png
+dynamics-preview.png
+node_modules/
+__pycache__/
+.env
+.env.*

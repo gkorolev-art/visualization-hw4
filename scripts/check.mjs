@@ -1,0 +1,63 @@
+import fs from 'node:fs';
+import vm from 'node:vm';
+import assert from 'node:assert/strict';
+const nodes=new Map();
+const node=key=>{if(!nodes.has(key))nodes.set(key,{innerHTML:'',textContent:'',value:'',hidden:false,style:{},querySelector:()=>node('close')});return nodes.get(key)};
+let registered;
+const context={window:{},document:{querySelector:node,querySelectorAll:()=>[],addEventListener(){},modelContext:{registerTool(t){registered=t}}},console,Intl,Date,Map,Set,innerWidth:1440,innerHeight:1000,setTimeout,clearTimeout};
+vm.createContext(context);
+vm.runInContext(fs.readFileSync('dist/data.js','utf8'),context);
+vm.runInContext(fs.readFileSync('dist/charts.js','utf8'),context);
+vm.runInContext(fs.readFileSync('dist/app.js','utf8'),context);
+const app=context.window.dashboard,data=context.window.PURCHASES;
+assert.equal(app.months('2026-08')[0],'2024-09');
+assert.equal(app.months('2026-08').length,24);
+const month=data.records.filter(r=>r[1].startsWith('2026-08'));
+assert.equal(app.series[23].orders,new Set(month.map(r=>r[0])).size);
+assert.equal(app.series[23].spend,month.reduce((s,r)=>s+r[6],0));
+const pmap=new Map(data.products.map(p=>[p.id,p]));
+const goods=month.filter(r=>pmap.get(r[2]).category!=='Услуги Лавки');
+const base=goods.reduce((s,r)=>s+r[3]*r[5],0),paid=goods.reduce((s,r)=>s+r[6],0);
+assert(Math.abs(app.series[23].discount-(1-paid/base)*100)<1e-8);
+const allMetrics={...app.series[23]};
+const result=registered.execute({category:'Вода',end:'2026-08'});
+assert.equal(result.category,'Вода');
+assert.equal(result.metrics.spend,goods.filter(r=>pmap.get(r[2]).category==='Вода').reduce((s,r)=>s+r[6],0));
+assert(app.ranked.every(p=>p.category==='Вода'));
+assert.throws(()=>registered.execute({category:'Не существует'}));
+assert.throws(()=>registered.execute({end:'2026-13'}));
+assert.equal(app.state.category,'Вода');
+registered.execute({category:'',end:'2023-08'});
+assert.equal(app.months(app.state.end)[0],'2021-09');
+registered.execute({category:'',end:'2026-08'});
+assert.equal(app.series[23].spend,allMetrics.spend);
+assert(nodes.get('#products').innerHTML.includes('data-product'));
+vm.runInContext("showProduct(ranked[0].id,{getBoundingClientRect:()=>({right:900,top:100})})",context);
+assert(nodes.get('#tooltip').innerHTML.includes('Цена за единицу'));
+assert(!nodes.get('#tooltip').innerHTML.includes('NaN'));
+for(const p of data.products) assert(fs.existsSync('dist/'+p.image),p.name);
+assert.equal(data.products.length,445);
+const stacks=vm.runInContext('spendingStacks(scoped,currentMonths,P)',context);
+for(let i=0;i<stacks.length;i++){
+  const {bands,total}=stacks[i];
+  assert.equal(total,app.series[i].spend);
+  assert.equal(bands[0].low,0);
+  for(let j=0;j<bands.length;j++){
+    assert.equal(bands[j].high-bands[j].low,bands[j].amount);
+    if(j){assert.equal(bands[j].low,bands[j-1].high);assert(bands[j].amount>=bands[j-1].amount)}
+  }
+  assert.equal(bands.at(-1).high,total);
+}
+const orderChart=vm.runInContext("chart('orders','Количество заказов','')",context);
+assert(orderChart.includes('metric-line'));
+assert(!orderChart.includes('<small>'));
+assert(!orderChart.includes('category-ribbon'));
+const spendingChart=vm.runInContext("chart('spend','Сумма трат','₽')",context);
+assert(spendingChart.includes('Сумма трат,&nbsp;₽'));
+assert(spendingChart.includes('category-ribbon'));
+assert(!spendingChart.includes('NaN'));
+registered.execute({category:'Вода'});
+const waterStacks=vm.runInContext('spendingStacks(scoped,currentMonths,P)',context);
+assert(waterStacks.every((s,i)=>s.bands.length===1&&s.bands[0].category==='Вода'&&s.total===app.series[i].spend));
+registered.execute({category:''});
+console.log(JSON.stringify({checks:'passed',latestMonth:allMetrics,products:data.products.length,webMCP:'validated with API stub; native browser context unavailable'},null,2));
